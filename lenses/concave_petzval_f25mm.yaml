@@ -1,0 +1,24 @@
+element0:
+  type: aperture
+  semi_dia: 12.5
+  pos: 0.0
+  xypos: [0, 0.0]
+element1:
+  type: stop
+  semi_dia: 6.25
+  pos: 0.0
+element2: 
+  R: -50.0
+  pos: 10.0
+  semi_dia: 12.5
+  type: mirror
+element3:
+  R: 100000000000.0
+  pos: 0.0
+  semi_dia: 6.25
+  type: mirror
+element4:
+  pos: 14.748
+  R: 15.228
+  semi_dia: 8.0
+  type: spherical_sensor

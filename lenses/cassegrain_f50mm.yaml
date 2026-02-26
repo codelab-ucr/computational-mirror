@@ -1,0 +1,32 @@
+element1:
+  pos: 0.0
+  semi_dia: 6.25
+  type: aperture
+  xypos: [0.0, 18.75]
+element2:
+  pos: 0.0
+  semi_dia: 12.5
+  type: stop
+element3:
+  R: -76.2
+  pos: 20.0
+  semi_dia: 25.0
+  type: mirror
+element4:
+  R: -85
+  pos: 0.0
+  semi_dia: 12.5
+  type: mirror
+element5:
+  pos: 30.0
+  semi_dia: 8.0
+  type: sensor
+optim:
+  fields:
+  - 0.0
+  - 0.07664953917264938
+  - 0.15240886807441711
+  focal_length: 50.0
+  type: optim
+  wavelengths:
+  - 0.9

@@ -1,0 +1,19 @@
+element0:
+  type: aperture
+  semi_dia: 25.0
+  #semi_dia: 6.25
+  pos: 0.0
+  xypos: [0.0, 0.0]
+element1:
+  type: stop
+  semi_dia: 12.5
+  pos: 0.0
+element2: # Thorlabs LA-1805
+  R: -100.0
+  pos: 50.0
+  semi_dia: 25.0
+  type: mirror
+element4:
+  pos: 0.0
+  semi_dia: 8.0
+  type: sensor

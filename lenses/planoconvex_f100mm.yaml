@@ -1,0 +1,17 @@
+element0:
+  type: aperture
+  semi_dia: 25.4
+  pos: 0.0
+  xypos: [0.0, 0.0]
+element1: 
+  R1: 51.5
+  R2: 10000000000
+  pos: 0.0
+  semi_dia: 25.4
+  material: NBK7
+  thickness: 9.7
+  type: refractive
+element2:
+  pos: 101.5
+  semi_dia: 8.0
+  type: sensor

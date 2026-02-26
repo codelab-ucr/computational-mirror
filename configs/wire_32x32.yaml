@@ -1,0 +1,27 @@
+# folding
+ksize: [32, 32]
+stride: [16, 16]
+
+# network
+in_features: 2
+out_features: 3
+nfeat: 50
+nlayers: 2
+omega_0: 50
+scale: 10
+nonlin: 'wire'
+share_weights: False
+
+# training
+lr: 5.e-3
+epochs: 1000
+loss: 'mse'
+switch_thres: 2.e-7
+coordstype: 'local'
+weightshare: 'share'
+propmethod: 'coarse2fine'
+maxchunks: 16384
+
+# warm starting
+warm_start: False
+warm_epochs: 100
