@@ -793,12 +793,16 @@ class BSplineConvSingle(torch.nn.Module):
         self.cps_coarse = cps_coarse
         self.cps_dense = cps_dense
         self.im_size= torch.Size((H, W))
-        coarse_grid = create_grid(cps_coarse,imsize,nterms)
-        dense_grid = create_grid(cps_dense,imsize,nterms)
+        #coarse_grid = create_grid(cps_coarse,imsize,nterms)
+        #dense_grid = create_grid(cps_dense,imsize,nterms)
 
-        self.grid_deformable = Grid(self.im_size)
-        kernel_coarse = FreeFormDeformation(self.grid_deformable, stride=cps_coarse).kernel()
-        kernel_dense =  FreeFormDeformation(self.grid_deformable, stride=cps_dense).kernel()
+        self.grid_deformable = Grid(shape=self.im_size)
+        coarse_field =FreeFormDeformation(self.grid_deformable, stride=cps_coarse)
+        dense_field=FreeFormDeformation(self.grid_deformable, stride=cps_dense)
+        kernel_coarse = coarse_field.kernel()
+        kernel_dense =  dense_field.kernel()
+        coarse_grid = torch.zeros((nterms,*coarse_field.data_shape))
+        dense_grid = torch.zeros((nterms,*dense_field.data_shape))
         self.transformation = evaluate_cubic_bspline
 
         #self.affine = torch.zeros(nterms, 2, 3)
