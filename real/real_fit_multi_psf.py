@@ -45,7 +45,7 @@ if __name__ == '__main__':
     ds_factor = 32              # Downsampling factor for weights
     bending_loss_on = True
     # Learning constants
-    spline_level =2
+    spline_level =3
     if spline_level==3:
         epochs = 3000
     elif spline_level==2:
