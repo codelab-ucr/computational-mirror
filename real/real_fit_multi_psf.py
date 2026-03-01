@@ -11,7 +11,7 @@ os.environ['KMP_DUPLICATE_LIB_OK'] = "TRUE"
 import numpy as np
 import torch
 from scipy import io
-
+from deepali.losses.functional import bspline_bending_loss
 from torch.optim.lr_scheduler import LambdaLR
 import matplotlib.pyplot as plt
 import cv2
@@ -42,10 +42,14 @@ if __name__ == '__main__':
     rmax = 1.02                  # Maximum stretch factor (initialization)
     R_focus = 0               # Initial focus position (0 for on axis)
     device = 'cuda'
-    ds_factor = 16              # Downsampling factor for weights
-
+    ds_factor = 32              # Downsampling factor for weights
+    bending_loss_on = True
     # Learning constants
-    epochs = 2000
+    spline_level =3
+    if spline_level==3:
+        epochs = 3000
+    elif spline_level==2:
+        epochs=2000
     learning_rate = 5e-3
     lambda_kern = 1e-6
     lambda_weights = 1e-1
@@ -68,7 +72,7 @@ if __name__ == '__main__':
         conv_op = linear.AffineConvMulti(nterms, dmax, rmax,
                                          (H, W, nchan), ds_factor).to(device)
     elif psfmodel == "bspline":
-         conv_op = linear.BSplineConvMulti(nterms,dmax,rmax,(H,W,nfocus),stride_coarse=256,stride_dense=128,ds_factor=ds_factor).to(device)    
+         conv_op = linear.BSplineConvMulti(nterms,dmax,rmax,(H,W,nfocus),stride_coarse=256,stride_middle=128,stride_dense=80,ds_factor=ds_factor).to(device)    
     elif psfmodel == 'radial':
         conv_op = linear.RadialConvMulti(nterms, dmax, rmax,
                                          (H, W, nchan), ds_factor).to(device)    
@@ -86,6 +90,8 @@ if __name__ == '__main__':
         params_sub = list(conv_op_sub.parameters())
         for name,params in conv_op_sub.named_parameters():
             if "dense_grid" in name:
+                params.requires_grad= False
+            elif "middle_grid" in name:
                 params.requires_grad= False
         meas_ten_sub = meas_ten[m_idx, ...]
 
@@ -113,24 +119,44 @@ if __name__ == '__main__':
         tbar = tqdm.tqdm(range(epochs))
 
         for idx in tbar:  
-            #sub_idx = torch.randperm(nimg, device=device)[:bsize]
-            #imblur_estim = conv_op(gt_ten[:, sub_idx, ...])
-                
-            #loss_l1 = criterion_data(imblur_estim - meas_ten[:, sub_idx, pad:-pad, pad:-pad])
-            #loss_kern = criterion_l1(conv_op.kernels)
+
+
             if idx==1000:
                 for name,params in conv_op_sub.named_parameters():
                     if "dense_grid" in name:
-                        params.requires_grad= True
+                        params.requires_grad= False
+                    elif "middle_grid" in name:
+                        params.requires_grad = True
                     elif "coarse_grid" in name:
                         params.requires_grad = False
+            if idx==2000:
+                 for name,params in conv_op_sub.named_parameters():
+                    if "dense_grid" in name:
+                        params.requires_grad= True
+                    elif "middle_grid" in name:
+                        params.requires_grad = False
+                    elif "coarse_grid" in name:
+                        params.requires_grad = False               
+
+        
             imblur_estim = conv_op_sub(gt_ten)
 
             loss_l1 = criterion_data(imblur_estim - meas_ten_sub[:, pad:-pad, pad:-pad])
             loss_kern = criterion_l1(conv_op_sub.kernels)
 
             loss = loss_l1 + lambda_kern*loss_kern
-            
+            if bending_loss_on:
+                if idx <1000:
+                    bending_loss= bspline_bending_loss(conv_op_sub.coarse_grid,stride=conv_op_sub.cps_coarse)
+                    bending_coefficient=1e-4
+                elif (idx)<2000:
+                    bending_loss = bspline_bending_loss(conv_op_sub.middle_grid,stride=conv_op_sub.cps_middle)
+                    bending_coefficient=1e-5
+                else:
+                    bending_loss = bspline_bending_loss(conv_op_sub.dense_grid,stride=conv_op_sub.cps_dense)
+                    bending_coefficient=1e-6
+                loss = loss + bending_coefficient*bending_loss
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()

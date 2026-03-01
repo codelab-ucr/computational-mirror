@@ -49,7 +49,7 @@ if __name__ == '__main__':
     dmax = 11
     nfocus = 3
     rmax = 1.1
-    ds_factor = 16
+    ds_factor = 32
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # Reconstruction method
@@ -86,7 +86,7 @@ if __name__ == '__main__':
         conv_op = linear.AffineConvMulti(nterms, dmax, rmax, (H, W, nfocus),
                                          ds_factor=ds_factor).to(device)
     elif psfmodel == "bspline":
-         conv_op = linear.BSplineConvMulti(nterms,dmax,rmax,(H,W,nfocus),stride_coarse=256,stride_dense=128,ds_factor=ds_factor).to(device)      
+         conv_op = linear.BSplineConvMulti(nterms,dmax,rmax,(H,W,nfocus),stride_coarse=256,stride_middle=128,stride_dense=80,ds_factor=ds_factor).to(device)      
     elif psfmodel == 'radial':
         conv_op = linear.RadialConvMulti(nterms, dmax, rmax,
                                          (H, W, nfocus), ds_factor).to(device)   

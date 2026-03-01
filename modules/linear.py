@@ -779,7 +779,7 @@ class BSplineConvSingle(torch.nn.Module):
             R_focus: Where the image is focused. 0 means at the center of the image
             ds_factor: Downsampling factor for weights, since they should be slowly varying
     '''
-    def __init__(self, nterms, dmax, rmax, imsize, ds_factor=32,cps_coarse=128,cps_dense=32):
+    def __init__(self, nterms, dmax, rmax, imsize, ds_factor=32,cps_coarse=128,cps_middle=64,cps_dense=32):
         super().__init__()
 
         # Learnable parameters are rfactors, kernels, and weights
@@ -791,6 +791,7 @@ class BSplineConvSingle(torch.nn.Module):
         disk_sizes = torch.linspace(1, dmax, nterms)
         self.pad =  dmax//2
         self.cps_coarse = cps_coarse
+        self.cps_middle = cps_middle
         self.cps_dense = cps_dense
         self.im_size= torch.Size((H, W))
         #coarse_grid = create_grid(cps_coarse,imsize,nterms)
@@ -798,10 +799,13 @@ class BSplineConvSingle(torch.nn.Module):
 
         self.grid_deformable = Grid(shape=self.im_size)
         coarse_field =FreeFormDeformation(self.grid_deformable, stride=cps_coarse)
+        middle_field = FreeFormDeformation(self.grid_deformable,stride=cps_middle)
         dense_field=FreeFormDeformation(self.grid_deformable, stride=cps_dense)
         kernel_coarse = coarse_field.kernel()
+        kernel_middle= middle_field.kernel()
         kernel_dense =  dense_field.kernel()
         coarse_grid = torch.zeros((nterms,*coarse_field.data_shape))
+        middle_grid = torch.zeros((nterms,*middle_field.data_shape))
         dense_grid = torch.zeros((nterms,*dense_field.data_shape))
         self.transformation = evaluate_cubic_bspline
 
@@ -845,11 +849,15 @@ class BSplineConvSingle(torch.nn.Module):
         self.kernels = ten2param(self.kernels)
         self.weights = ten2param(self.weights)
         self.coarse_grid = ten2param(coarse_grid)
+        self.middle_grid = ten2param(middle_grid)
         self.dense_grid= ten2param(dense_grid)
+
 
         self.register_buffer('grid_rep', grid_rep)
         self.register_buffer('kernel_coarse0', kernel_coarse[0])
         self.register_buffer('kernel_coarse1', kernel_coarse[1])
+        self.register_buffer("kernel_middle0", kernel_middle[0])
+        self.register_buffer("kernel_middle1", kernel_middle[1])
         self.register_buffer('kernel_dense0',  kernel_dense[0])
         self.register_buffer('kernel_dense1',  kernel_dense[1])
     
@@ -866,17 +874,24 @@ class BSplineConvSingle(torch.nn.Module):
         imten_rep = torch.repeat_interleave(imten, self.nterms, 0)
 
         bspline_coarse = (self.kernel_coarse0,self.kernel_coarse1)
+        bspline_middle = (self.kernel_middle0,self.kernel_middle1)
         bspline_dense = (self.kernel_dense0,self.kernel_dense1)
 
         coarse_sparse_velocities = 0.5 * torch.tanh(self.coarse_grid)
         coarse_velocities = self.transformation(coarse_sparse_velocities, stride=self.cps_coarse, shape=self.im_size, kernel=bspline_coarse)
         coarse_displacement = expv(coarse_velocities,steps=7)
 
-        dense_sparse_velocities = 0.2*torch.tanh(self.dense_grid)
+        middle_sparse_velocities = 0.2*torch.tanh(self.middle_grid)
+        middle_velocities =  self.transformation(middle_sparse_velocities,stride=self.cps_middle, shape=self.im_size, kernel=bspline_middle)
+        middle_displacement = expv(middle_velocities,steps=7)
+
+        dense_sparse_velocities = 0.1*torch.tanh(self.dense_grid)
         dense_velocities = self.transformation(dense_sparse_velocities, stride=self.cps_dense, shape=self.im_size, kernel=bspline_dense)
         dense_displacement = expv(dense_velocities,steps=7)
 
-        self.total_displacement = coarse_displacement + dense_displacement
+
+
+        self.total_displacement = coarse_displacement + dense_displacement + middle_displacement
         grid_stretched = self.total_displacement.permute(0, 2, 3, 1) + grid_mat.view(nterms,H,W,2)
 
 
@@ -993,11 +1008,11 @@ class BSplineConvMulti(torch.nn.Module):
                     channels!
             ds_factor: Downsampling factor for weights, since they should be slowly varying
     '''
-    def __init__(self, nterms, dmax, rmax, imsize,stride_coarse=256,stride_dense=32, ds_factor=32):
+    def __init__(self, nterms, dmax, rmax, imsize,stride_coarse=256,stride_middle=128,stride_dense=64, ds_factor=32):
         super().__init__()
         nchan = imsize[2]
         self.conv_ops = nn.ModuleList([BSplineConvSingle(nterms, dmax,
-                                                        rmax, imsize,cps_coarse=stride_coarse,cps_dense=stride_dense,
+                                                        rmax, imsize,cps_coarse=stride_coarse,cps_middle=stride_middle,cps_dense=stride_dense,
                                                         ds_factor=ds_factor) for _ in range(nchan)])
     
     def forward(self, image, eval=False):
