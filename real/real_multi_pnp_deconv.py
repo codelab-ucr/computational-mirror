@@ -39,15 +39,15 @@ linear = importlib.reload(linear)
 pnpsolver = importlib.reload(pnpsolver)
 
 if __name__ == '__main__':
-    expname = 'iso_reschart'
+    expname = 'sector'
     expfolder = '2.17.validation'
     calibfolder = '2.19.calib'
     root = '/home/akayabasi/broadband_mirror/real/pyprocessed'
     mode = 'multi'
-    psfmodel = 'bspline'
+    psfmodel = 'definr'
     nterms = 31
     dmax = 11
-    nfocus = 3
+    nfocus = 1
     rmax = 1.1
     ds_factor = 32
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -55,7 +55,7 @@ if __name__ == '__main__':
     # Reconstruction method
     rec_method = 'pnp'
     pnp_weights_path = '../modules/drunet_gray.pth'
-    n_iters = 100
+    n_iters = 200
     cg_iters = 10
     lamb = 1e-5
     step_size = 1.9e-3
@@ -86,7 +86,9 @@ if __name__ == '__main__':
         conv_op = linear.AffineConvMulti(nterms, dmax, rmax, (H, W, nfocus),
                                          ds_factor=ds_factor).to(device)
     elif psfmodel == "bspline":
-         conv_op = linear.BSplineConvMulti(nterms,dmax,rmax,(H,W,nfocus),stride_coarse=256,stride_middle=128,stride_dense=80,ds_factor=ds_factor).to(device)      
+         conv_op = linear.BSplineConvMulti(nterms,dmax,rmax,(H,W,nfocus),stride_coarse=256,stride_middle=128,stride_dense=80,ds_factor=ds_factor).to(device)     
+    elif psfmodel == "definr":
+         conv_op = linear.DefINRConvMulti(nterms,dmax,rmax,(H,W,nfocus),ds_factor=ds_factor,cps=32).to(device)  
     elif psfmodel == 'radial':
         conv_op = linear.RadialConvMulti(nterms, dmax, rmax,
                                          (H, W, nfocus), ds_factor).to(device)   
@@ -127,9 +129,9 @@ if __name__ == '__main__':
     prior = pnpsolver.GrayscaleDPIR(pnp_weights_path,
                                     device='cuda')
 
-    cv2.imshow('Ground truth', im[..., ::-1])
-    cv2.imshow('Blurred image', meas[..., 0]/meas.max())
-    cv2.waitKey(1)
+    #cv2.imshow('Ground truth', im[..., ::-1])
+    #cv2.imshow('Blurred image', meas[..., 0]/meas.max())
+    #cv2.waitKey(1)
 
     forward_op = lambda x : conv_op(x, eval=False)
     best_imten = pnpsolver.pnp_hqs_blackbox(
@@ -167,4 +169,4 @@ if __name__ == '__main__':
                                                nterms, dmax,
                                                rec_method), imsave)
     
-    cv2.imshow('Compare', utils.normalize(np.hstack((meas[..., 0]/meas.max(), imsave))))
+    #cv2.imshow('Compare', utils.normalize(np.hstack((meas[..., 0]/meas.max(), imsave))))
