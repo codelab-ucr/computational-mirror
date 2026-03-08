@@ -36,7 +36,7 @@ if __name__ == '__main__':
     root = '/mnt/mydisk/alper/broadband_imaging/data'
     mode = 'multi'
     nfocus = 1
-    psfmodel = 'definr'      # affine or eigen
+    psfmodel = 'bspline'      # affine or eigen
     nterms = 31                  # Number of decomposition terms
     dmax = 11                     # Maximum disk size (initialization)
     rmax = 1.02                  # Maximum stretch factor (initialization)
@@ -54,7 +54,8 @@ if __name__ == '__main__':
     lambda_kern = 1e-6
     lambda_weights = 1e-1
     bsize = 10                   # Batch size
-    warmup_steps = 500
+    scheduler_type = "cosine_with_warmup" # exponential or cosine_with_warmup
+    warmup_steps = 50
     # Load data
     data = io.loadmat('%s/%s/pytraining_%s%d.mat'%(root, session_name, mode, nfocus))
     gt = data['gt_stack'][..., :10]
@@ -90,25 +91,29 @@ if __name__ == '__main__':
     for m_idx in range(nfocus):
         conv_op_sub = conv_op.conv_ops[m_idx]
         params_sub = list(conv_op_sub.parameters())
-
+        if psfmodel == "bspline":
+            for name,params in conv_op_sub.named_parameters():
+                if "dense_grid" in name:
+                    params.requires_grad= False
+                elif "middle_grid" in name:
+                    params.requires_grad= False
         meas_ten_sub = meas_ten[m_idx, ...]
 
         # Create optimizer
         optimizer = torch.optim.Adam(lr=learning_rate, params=params_sub)
 
-        # Scheduler
-        warmup_scheduler = LinearLR(optimizer, start_factor=0.01, total_iters=warmup_steps)
 
-        # Cosine: Decays from base LR down to 0 over the remaining steps
-        cosine_scheduler = CosineAnnealingLR(optimizer, T_max=(epochs - 500), eta_min=0.1*learning_rate)
-
-        # 4. Chain them together
-        scheduler = SequentialLR(
-            optimizer, 
-            schedulers=[warmup_scheduler, cosine_scheduler], 
-            milestones=[warmup_steps]
-        )
-        
+        if scheduler_type == "cosine_with_warmup":
+            warmup_scheduler = LinearLR(optimizer, start_factor=0.01, total_iters=warmup_steps)
+            cosine_scheduler = CosineAnnealingLR(optimizer, T_max=(epochs - warmup_steps), eta_min=0.1*learning_rate)
+            scheduler = SequentialLR(
+                optimizer, 
+                schedulers=[warmup_scheduler, cosine_scheduler], 
+                milestones=[warmup_steps]
+            )
+        elif scheduler_type=="exponential":
+            scheduler = LambdaLR(optimizer, lambda x: 0.1**(min(x/epochs, 1)))
+            
         criterion_data = losses.L2Norm()
         criterion_l1 = losses.L1Norm()
         criterion_tv = losses.TVNorm(mode='l2').cuda()
@@ -128,6 +133,23 @@ if __name__ == '__main__':
 
         for idx in tbar:  
 
+            if (idx==1000) and (psfmodel=="bspliine"):
+                for name,params in conv_op_sub.named_parameters():
+                    if "dense_grid" in name:
+                        params.requires_grad= False
+                    elif "middle_grid" in name:
+                        params.requires_grad = True
+                    elif "coarse_grid" in name:
+                        params.requires_grad = False
+            if (idx==2000) and (psfmodel=="bspline"):
+                 for name,params in conv_op_sub.named_parameters():
+                    if "dense_grid" in name:
+                        params.requires_grad= True
+                    elif "middle_grid" in name:
+                        params.requires_grad = False
+                    elif "coarse_grid" in name:
+                        params.requires_grad = False        
+
 
         
             imblur_estim = conv_op_sub(gt_ten)
@@ -137,7 +159,16 @@ if __name__ == '__main__':
             
             loss = loss_l1 + lambda_kern*loss_kern
             if bending_loss_on:
-                bending_energy = 1e-3*bspline_bending_loss(conv_op_sub.deformation_field,stride=conv_op_sub.bspline_cps)
+                if psfmodel == "definr":
+                    bending_energy = 1e-3*bspline_bending_loss(conv_op_sub.deformation_field,stride=conv_op_sub.bspline_cps)
+                elif psfmodel == "bspline":
+                    if idx <1000:
+                        bending_energy= 1e-4*bspline_bending_loss(conv_op_sub.coarse_grid,stride=conv_op_sub.cps_coarse)
+                    elif (idx)<2000:
+                        bending_energy = 1e-5*bspline_bending_loss(conv_op_sub.middle_grid,stride=conv_op_sub.cps_middle)
+                    else:
+                        bending_energy = 1e-6*bspline_bending_loss(conv_op_sub.dense_grid,stride=conv_op_sub.cps_dense)
+                    
                 loss = loss + bending_energy
 
             optimizer.zero_grad()

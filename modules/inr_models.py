@@ -452,14 +452,15 @@ class PosEncoding(nn.Module):
         return coords_pos_enc.reshape(coords.shape[0], -1, self.out_dim)
     
 class INR(nn.Module):
-    def __init__(self, in_features, hidden_features, hidden_layers, 
+    def __init__(self, in_features, hidden_features, hidden_layers,
                  out_features, nonlinearity='sine', outermost_linear=True,
                  first_omega_0=30, hidden_omega_0=30., scale=10.0,
                  pos_encode=False, sidelength=512, fn_samples=None,
-                 use_nyquist=True, inner_siren=False):
+                 use_nyquist=True, inner_siren=False, zero_init=False):
         super().__init__()
         self.pos_encode = pos_encode
-        
+        self.zero_init = zero_init
+
         self.complex = False
         if nonlinearity == 'sine':
             self.nonlin = SineLayer
@@ -485,7 +486,7 @@ class INR(nn.Module):
             self.nonlin = ReLULayer
         else:
             raise ValueError('Nonlinearity not known')
-        
+
         if inner_siren:
             self.complex = True
             if nonlinearity == 'gabor' or nonlinearity == 'gabor2d':
@@ -496,21 +497,21 @@ class INR(nn.Module):
                 hidden_omega_0 = scale*2
         else:
             self.nonlin_inner = self.nonlin
-            
+
         if pos_encode:
             self.positional_encoding = PosEncoding(in_features=in_features,
                                                    sidelength=sidelength,
                                                    fn_samples=fn_samples,
                                                    use_nyquist=use_nyquist)
             in_features = self.positional_encoding.out_dim
-            
+
         self.net = []
-        self.net.append(self.nonlin(in_features, hidden_features, 
+        self.net.append(self.nonlin(in_features, hidden_features,
                                   is_first=True, omega_0=first_omega_0,
                                   scale=scale))
 
         for i in range(hidden_layers):
-            self.net.append(self.nonlin_inner(hidden_features, hidden_features, 
+            self.net.append(self.nonlin_inner(hidden_features, hidden_features,
                                       is_first=False, omega_0=hidden_omega_0,
                                       scale=scale))
 
@@ -522,18 +523,22 @@ class INR(nn.Module):
             final_linear = nn.Linear(hidden_features,
                                      out_features,
                                      dtype=dtype)
-            
-            if nonlinearity in ['sine', 'gabor', 'realgabor', 'gabor2d']:
+
+            if zero_init:
+                with torch.no_grad():
+                    final_linear.weight.zero_()
+                    final_linear.bias.zero_()
+            elif nonlinearity in ['sine', 'gabor', 'realgabor', 'gabor2d']:
                 with torch.no_grad():
                     const = np.sqrt(6/hidden_features)/max(hidden_omega_0, 1e-12)
                     final_linear.weight.uniform_(-const, const)
-                        
+
             self.net.append(final_linear)
         else:
-            self.net.append(self.nonlin_inner(hidden_features, out_features, 
+            self.net.append(self.nonlin_inner(hidden_features, out_features,
                                       is_first=False, omega_0=hidden_omega_0,
                                       scale=scale))
-        
+
         self.net = nn.Sequential(*self.net)
     
     def forward(self, coords):

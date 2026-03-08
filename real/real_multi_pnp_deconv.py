@@ -44,7 +44,7 @@ if __name__ == '__main__':
     calibfolder = '2.19.calib'
     root = '/home/akayabasi/broadband_mirror/real/pyprocessed'
     mode = 'multi'
-    psfmodel = 'definr'
+    psfmodel = 'bspline'
     nterms = 31
     dmax = 11
     nfocus = 1
@@ -129,9 +129,9 @@ if __name__ == '__main__':
     prior = pnpsolver.GrayscaleDPIR(pnp_weights_path,
                                     device='cuda')
 
-    #cv2.imshow('Ground truth', im[..., ::-1])
-    #cv2.imshow('Blurred image', meas[..., 0]/meas.max())
-    #cv2.waitKey(1)
+    cv2.imshow('Ground truth', im[..., ::-1])
+    cv2.imshow('Blurred image', meas[..., 0]/meas.max())
+    cv2.waitKey(1)
 
     forward_op = lambda x : conv_op(x, eval=False)
     best_imten = pnpsolver.pnp_hqs_blackbox(
@@ -169,4 +169,4 @@ if __name__ == '__main__':
                                                nterms, dmax,
                                                rec_method), imsave)
     
-    #cv2.imshow('Compare', utils.normalize(np.hstack((meas[..., 0]/meas.max(), imsave))))
+    cv2.imshow('Compare', utils.normalize(np.hstack((meas[..., 0]/meas.max(), imsave))))
