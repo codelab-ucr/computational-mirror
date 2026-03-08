@@ -15,10 +15,13 @@ from deepali.core.bspline import evaluate_cubic_bspline
 from deepali.spatial.bspline import FreeFormDeformation
 from deepali.core import Grid
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 from torch import nn
 from utils import set_kernel
 import kornia
-
+import sys
+sys.path.append("/home/akayabasi/computational-mirror/")
+from modules.inr_models import INR
 from scipy import linalg
 
 import torchvision
@@ -648,6 +651,159 @@ class AffineConvSingle(torch.nn.Module):
 
         return imten_blur
     
+class DefINRConvSingle(torch.nn.Module):
+    '''
+        Spatially varying convolution with Affine transform of image
+
+        Parameters:
+            nterms: Number of stretches/affine transforms to perform on images
+            dmax: Maximum size of PSF disk
+            rmax: Maximum rescaling factor
+            imsize: 3-tuple of image size (H, W, nchan)
+            R_focus: Where the image is focused. 0 means at the center of the image
+            ds_factor: Downsampling factor for weights, since they should be slowly varying
+    '''
+    def __init__(self, nterms, dmax, rmax, imsize, ds_factor=32, cps=32,use_checkpoint=False):
+        super().__init__()
+
+        # Learnable parameters are rfactors, kernels, and weights
+
+        H, W, nchan = imsize
+        self.nterms = nterms
+        self.ds_factor = ds_factor
+        self.use_checkpoint = use_checkpoint
+
+        disk_sizes = torch.linspace(1, dmax, nterms)
+        self.pad =  dmax//2
+        self.im_size= torch.Size((H, W))
+
+        self.grid_deformable = Grid(shape=self.im_size)
+        self.bspline_cps = cps
+        bspline_field =FreeFormDeformation(self.grid_deformable, stride=cps)
+        bspline_kernel = bspline_field.kernel()
+        bspline_grid = torch.zeros((nterms,*bspline_field.data_shape))
+        self.bspline_interpolator = evaluate_cubic_bspline
+        self.ch, self.cw = bspline_field.data_shape[-2:]
+        contr_x, contr_y = torch.meshgrid(torch.linspace(-1, 1,self.cw),
+                    torch.linspace(-1, 1, self.ch),
+                    indexing='xy')
+        control_grid = torch.cat((contr_x[None, ..., None], contr_y[None, ..., None]), -1)
+        control_grid = control_grid.view(self.cw*self.ch,-1)
+
+
+        # Create deformation field (real part -> x, imaginary part -> y)
+        self.deformation_network = INR(in_features=2,hidden_features=512,hidden_layers=1,out_features=nterms,nonlinearity="gabor2d",scale=4,zero_init=True,first_omega_0=1, hidden_omega_0=1)
+        
+        # Create convolution kernels
+        kX, kY = torch.meshgrid(torch.linspace(-1, 1, dmax),
+                                torch.linspace(-1, 1, dmax),
+                                indexing='xy')
+        kR = torch.hypot(kX, kY)[None, None, ...]
+        kR = torch.repeat_interleave(kR, nterms, 0)
+        
+        kernels = 1 - torch.sigmoid(100*(kR - disk_sizes[:, None, None, None]/dmax))
+        kernels = kernels.float()
+
+        kernsum = kernels.sum(-1, keepdim=True).sum(-2, keepdim=True)
+        self.kernels = kernels/kernsum
+
+ 
+        # Create expansion grids
+        X, Y = torch.meshgrid(torch.linspace(-1, 1, W),
+                            torch.linspace(-1, 1, H),
+                            indexing='xy')
+        grid = torch.cat((X[None, ..., None], Y[None, ..., None]), -1)
+        grid_rep = torch.repeat_interleave(grid, nterms, 0)
+
+        X, Y = torch.meshgrid(torch.linspace(-1, 1, W//ds_factor),
+                            torch.linspace(-1, 1, H//ds_factor),
+                            indexing='xy')
+                
+        # Create weights for each term
+        R = torch.hypot(X, Y)[None, ...]
+        cR = torch.linspace(0, np.sqrt(2), nterms)[:, None, None]
+        cS = (4/nterms)**2
+        
+        self.weights = torch.exp(-((R - cR)**2)/(cS))[:, None, ...]
+
+        # Make parameters learnable
+        #self.affine = ten2param(self.affine)
+        self.kernels = ten2param(self.kernels)
+        self.weights = ten2param(self.weights)
+        self.register_buffer('grid_rep', grid_rep)
+        self.register_buffer('bspline_kernel0',  bspline_kernel[0])
+        self.register_buffer('bspline_kernel1',  bspline_kernel[1])
+        self.register_buffer('control_grid', control_grid)
+
+
+    
+    def forward(self, imten, eval=False):
+        # Create grid
+        nterms, H, W, _ = self.grid_rep.shape
+
+        grid_mat = self.grid_rep.reshape(nterms, H*W, 2)
+        #grid_mul_only = torch.bmm(grid_mat, self.affine[:, :, :2])
+        #grid_stretched = grid_mul_only + self.affine[:, :, [2]].permute(0, 2, 1)
+        #grid_stretched = grid_stretched.reshape(nterms, H, W, 2)
+
+        # Replicate image tensor
+        imten_rep = torch.repeat_interleave(imten, self.nterms, 0)
+        if self.use_checkpoint:
+            deformation_x = checkpoint(self.deformation_network, self.control_grid, use_reentrant=False)
+        else:
+            deformation_x = self.deformation_network(self.control_grid)
+        deformation_y = self.deformation_network.imag_output
+
+        bspline_kernel = (self.bspline_kernel0,self.bspline_kernel1)
+        deformation_field = torch.stack([deformation_x,deformation_y],-1)# ch*cw,32,2
+        deformation_field = 0.4*torch.tanh(deformation_field)
+        deformation_field = deformation_field.permute(1,2,0).view(self.nterms,2,self.ch,self.cw)
+        self.deformation_field = deformation_field
+        deformation_field = self.bspline_interpolator(deformation_field,stride=self.bspline_cps,shape= self.im_size,kernel=bspline_kernel)
+        deformation_field = expv(deformation_field, steps=7)
+        deformation_field = deformation_field.permute(0,2,3,1)
+        grid_stretched = deformation_field + grid_mat.view(nterms,H,W,2)
+
+
+
+        # Interpolate
+        if eval:
+            padding_mode = 'border'
+        else:
+            padding_mode = 'zeros'
+        imten_stretch = torch.nn.functional.grid_sample(
+            imten_rep, grid_stretched, mode='bilinear',
+            align_corners=False, padding_mode=padding_mode
+        )
+        self.imten_stretch = imten_stretch
+
+        imten_padded = torch.nn.functional.pad(
+            imten_stretch.permute(1, 0, 2, 3),
+            [self.pad]*4,
+            mode='replicate'
+        )
+        
+        # Convolve
+        imten_blur_stack = torch.nn.functional.conv2d(
+            imten_stretch.permute(1, 0, 2, 3),
+            self.kernels, groups=self.nterms)
+        imten_blur_stack = imten_blur_stack.permute(1, 0, 2, 3)
+
+        _, _, Hs, Ws = imten_blur_stack.shape
+
+        # Upsample weights
+        weights_up = torch.nn.functional.interpolate(self.weights,
+                                                     #scale_factor=self.ds_factor,
+                                                     size=(Hs, Ws),
+                                                     mode='bilinear')
+        
+        imten_blur = (imten_blur_stack*weights_up).mean(0)
+
+        return imten_blur
+
+
+
+
 class RadialConvSingle(torch.nn.Module):
     '''
         Spatially varying convolution with Affine transform of image
@@ -1014,6 +1170,36 @@ class BSplineConvMulti(torch.nn.Module):
         self.conv_ops = nn.ModuleList([BSplineConvSingle(nterms, dmax,
                                                         rmax, imsize,cps_coarse=stride_coarse,cps_middle=stride_middle,cps_dense=stride_dense,
                                                         ds_factor=ds_factor) for _ in range(nchan)])
+    
+    def forward(self, image, eval=False):
+        output_list = [conv_op(image, eval)[None, ...] for conv_op in self.conv_ops]
+
+        klist = [conv_op.kernels for conv_op in self.conv_ops]
+        self.kernels = torch.cat(klist, dim=0)
+
+        wlist = [conv_op.weights for conv_op in self.conv_ops]
+        self.weights = torch.cat(wlist, dim=0)
+
+        return torch.cat(output_list, dim=0)
+    
+class DefINRConvMulti(torch.nn.Module):
+    '''
+        Spatially varying convolution with Affine transform of image
+
+        Parameters:
+            nterms: Number of stretches/affine transforms to perform on images
+            dmax: Maximum size of PSF disk
+            rmax: Maximum rescaling factor
+            imsize: 3-tuple of image size (H, W, nchan)
+                NOTE: Here, nchan is the number of focus images, and not wavelength
+                    channels!
+            ds_factor: Downsampling factor for weights, since they should be slowly varying
+            use_checkpoint: If True, use gradient checkpointing on INR to save memory
+    '''
+    def __init__(self, nterms, dmax, rmax, imsize, ds_factor=32, use_checkpoint=False,cps=32):
+        super().__init__()
+        nchan = imsize[2]
+        self.conv_ops = nn.ModuleList([DefINRConvSingle(nterms, dmax, rmax, imsize,ds_factor=ds_factor, cps=cps,use_checkpoint=use_checkpoint) for _ in range(nchan)])
     
     def forward(self, image, eval=False):
         output_list = [conv_op(image, eval)[None, ...] for conv_op in self.conv_ops]

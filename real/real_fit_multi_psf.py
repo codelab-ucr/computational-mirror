@@ -11,8 +11,8 @@ os.environ['KMP_DUPLICATE_LIB_OK'] = "TRUE"
 import numpy as np
 import torch
 from scipy import io
-from deepali.losses.functional import bspline_bending_loss
-from torch.optim.lr_scheduler import LambdaLR
+from deepali.losses.functional import bspline_bending_loss, bending_loss
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR,LambdaLR
 import matplotlib.pyplot as plt
 import cv2
 
@@ -33,9 +33,9 @@ linear = importlib.reload(linear)
 
 if __name__ == '__main__':
     session_name = '2.19.calib'
-    root = '/home/akayabasi/broadband_mirror/real/data'
+    root = '/mnt/mydisk/alper/broadband_imaging/data'
     mode = 'multi'
-    nfocus = 3
+    nfocus = 1
     psfmodel = 'bspline'      # affine or eigen
     nterms = 31                  # Number of decomposition terms
     dmax = 11                     # Maximum disk size (initialization)
@@ -54,7 +54,8 @@ if __name__ == '__main__':
     lambda_kern = 1e-6
     lambda_weights = 1e-1
     bsize = 10                   # Batch size
-
+    scheduler_type = "cosine_with_warmup" # exponential or cosine_with_warmup
+    warmup_steps = 50
     # Load data
     data = io.loadmat('%s/%s/pytraining_%s%d.mat'%(root, session_name, mode, nfocus))
     gt = data['gt_stack'][..., :10]
@@ -73,6 +74,8 @@ if __name__ == '__main__':
                                          (H, W, nchan), ds_factor).to(device)
     elif psfmodel == "bspline":
          conv_op = linear.BSplineConvMulti(nterms,dmax,rmax,(H,W,nfocus),stride_coarse=256,stride_middle=128,stride_dense=80,ds_factor=ds_factor).to(device)    
+    elif psfmodel == "definr":
+         conv_op = linear.DefINRConvMulti(nterms,dmax,rmax,(H,W,nfocus),ds_factor=ds_factor,cps=32).to(device)  
     elif psfmodel == 'radial':
         conv_op = linear.RadialConvMulti(nterms, dmax, rmax,
                                          (H, W, nchan), ds_factor).to(device)    
@@ -88,19 +91,29 @@ if __name__ == '__main__':
     for m_idx in range(nfocus):
         conv_op_sub = conv_op.conv_ops[m_idx]
         params_sub = list(conv_op_sub.parameters())
-        for name,params in conv_op_sub.named_parameters():
-            if "dense_grid" in name:
-                params.requires_grad= False
-            elif "middle_grid" in name:
-                params.requires_grad= False
+        if psfmodel == "bspline":
+            for name,params in conv_op_sub.named_parameters():
+                if "dense_grid" in name:
+                    params.requires_grad= False
+                elif "middle_grid" in name:
+                    params.requires_grad= False
         meas_ten_sub = meas_ten[m_idx, ...]
 
         # Create optimizer
         optimizer = torch.optim.Adam(lr=learning_rate, params=params_sub)
 
-        # Scheduler
-        scheduler = LambdaLR(optimizer, lambda x: 0.1**(min(x/epochs, 1)))
-        
+
+        if scheduler_type == "cosine_with_warmup":
+            warmup_scheduler = LinearLR(optimizer, start_factor=0.01, total_iters=warmup_steps)
+            cosine_scheduler = CosineAnnealingLR(optimizer, T_max=(epochs - warmup_steps), eta_min=0.1*learning_rate)
+            scheduler = SequentialLR(
+                optimizer, 
+                schedulers=[warmup_scheduler, cosine_scheduler], 
+                milestones=[warmup_steps]
+            )
+        elif scheduler_type=="exponential":
+            scheduler = LambdaLR(optimizer, lambda x: 0.1**(min(x/epochs, 1)))
+            
         criterion_data = losses.L2Norm()
         criterion_l1 = losses.L1Norm()
         criterion_tv = losses.TVNorm(mode='l2').cuda()
@@ -111,8 +124,8 @@ if __name__ == '__main__':
         best_loss = float('inf')
         best_epoch = 0
 
-        cv2.imshow('Measurement', meas[..., m_idx, 0]/meas.max())
-        cv2.waitKey(1)
+        #cv2.imshow('Measurement', meas[..., m_idx, 0]/meas.max())
+        #cv2.waitKey(1)
 
         pad = (dmax-1)//2
 
@@ -120,8 +133,7 @@ if __name__ == '__main__':
 
         for idx in tbar:  
 
-
-            if idx==1000:
+            if (idx==1000) and (psfmodel=="bspliine"):
                 for name,params in conv_op_sub.named_parameters():
                     if "dense_grid" in name:
                         params.requires_grad= False
@@ -129,33 +141,35 @@ if __name__ == '__main__':
                         params.requires_grad = True
                     elif "coarse_grid" in name:
                         params.requires_grad = False
-            if idx==2000:
+            if (idx==2000) and (psfmodel=="bspline"):
                  for name,params in conv_op_sub.named_parameters():
                     if "dense_grid" in name:
                         params.requires_grad= True
                     elif "middle_grid" in name:
                         params.requires_grad = False
                     elif "coarse_grid" in name:
-                        params.requires_grad = False               
+                        params.requires_grad = False        
+
 
         
             imblur_estim = conv_op_sub(gt_ten)
 
             loss_l1 = criterion_data(imblur_estim - meas_ten_sub[:, pad:-pad, pad:-pad])
             loss_kern = criterion_l1(conv_op_sub.kernels)
-
+            
             loss = loss_l1 + lambda_kern*loss_kern
             if bending_loss_on:
-                if idx <1000:
-                    bending_loss= bspline_bending_loss(conv_op_sub.coarse_grid,stride=conv_op_sub.cps_coarse)
-                    bending_coefficient=1e-4
-                elif (idx)<2000:
-                    bending_loss = bspline_bending_loss(conv_op_sub.middle_grid,stride=conv_op_sub.cps_middle)
-                    bending_coefficient=1e-5
-                else:
-                    bending_loss = bspline_bending_loss(conv_op_sub.dense_grid,stride=conv_op_sub.cps_dense)
-                    bending_coefficient=1e-6
-                loss = loss + bending_coefficient*bending_loss
+                if psfmodel == "definr":
+                    bending_energy = 1e-3*bspline_bending_loss(conv_op_sub.deformation_field,stride=conv_op_sub.bspline_cps)
+                elif psfmodel == "bspline":
+                    if idx <1000:
+                        bending_energy= 1e-4*bspline_bending_loss(conv_op_sub.coarse_grid,stride=conv_op_sub.cps_coarse)
+                    elif (idx)<2000:
+                        bending_energy = 1e-5*bspline_bending_loss(conv_op_sub.middle_grid,stride=conv_op_sub.cps_middle)
+                    else:
+                        bending_energy = 1e-6*bspline_bending_loss(conv_op_sub.dense_grid,stride=conv_op_sub.cps_dense)
+                    
+                loss = loss + bending_energy
 
             optimizer.zero_grad()
             loss.backward()
@@ -178,9 +192,9 @@ if __name__ == '__main__':
                 img = imblur_test[0, ...].detach().cpu().numpy()
                 err = abs(img - meas[pad:-pad, pad:-pad, m_idx, 0])
                 
-                cv2.imshow('Estimate', img/img.max())
-                cv2.imshow('Error', 10*err/err.max())
-                cv2.waitKey(1)
+                #cv2.imshow('Estimate', img/img.max())
+                #cv2.imshow('Error', 10*err/err.max())
+                #cv2.waitKey(1)
 
     # To get kernels
     with torch.no_grad():
