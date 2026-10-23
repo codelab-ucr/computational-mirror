@@ -211,3 +211,5 @@ __marimo__/
 *.png
 # camera capture SDK (vendor binary): kept out of this repository
 capture/
+# editor settings
+.vscode/
