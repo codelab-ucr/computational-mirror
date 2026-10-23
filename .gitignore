@@ -209,3 +209,5 @@ __marimo__/
 *.pt
 *.mat
 *.png
+# camera capture SDK (vendor binary): kept out of this repository
+capture/
