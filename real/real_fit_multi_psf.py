@@ -46,9 +46,9 @@ if __name__ == '__main__':
         epochs=2000
     learning_rate = 5e-3
     lambda_kern = 1e-6
-    # Training recipe: learning-rate schedule 'cosine_with_warmup' (since 2026-03-05) or 'exponential' (the
-    # 2026-03-01 code); both with bending weights (1e-4, 1e-5, 1e-6)
-    scheduler_type = "cosine_with_warmup" # exponential or cosine_with_warmup
+    # Training recipe: learning-rate schedule 'exponential' (as for the published model; retraining with it
+    # reproduces that model) or 'cosine_with_warmup' (equivalent results); bending weights (1e-4, 1e-5, 1e-6)
+    scheduler_type = "exponential"       # exponential or cosine_with_warmup
     warmup_steps = 50
     bending_weights = (1e-4, 1e-5, 1e-6)   # B-spline bending penalty of the coarse, middle and dense grids
     # Load data
