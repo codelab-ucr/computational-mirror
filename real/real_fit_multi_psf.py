@@ -69,8 +69,8 @@ if __name__ == '__main__':
     gt_ten = torch.tensor(gt)[None, ...].to(device).permute(0, 3, 1, 2)
     meas_ten = torch.tensor(meas).to(device).permute(2, 3, 0, 1)
             
-    if psfmodel == 'affineplus':
-        conv_op = linear.AffineConvMulti(nterms, dmax, rmax,
+    if psfmodel == 'seidelconv':
+        conv_op = linear.SeidelConvMulti(nterms, dmax, rmax,
                                          (H, W, nchan), ds_factor).to(device)
     elif psfmodel == "bspline":
          conv_op = linear.BSplineConvMulti(nterms,dmax,rmax,(H,W,nfocus),stride_coarse=256,stride_middle=128,stride_dense=80,ds_factor=ds_factor).to(device)    

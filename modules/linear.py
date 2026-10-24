@@ -538,9 +538,10 @@ class AffineConvRSAdapt(torch.nn.Module):
 
         return imten_blur
 
-class AffineConvSingle(torch.nn.Module):
+class SeidelConvSingle(torch.nn.Module):
     '''
-        Spatially varying convolution with Affine transform of image
+        SeidelConv: spatially varying convolution as a sum of terms, each an affine warp of the image, a
+        convolution kernel and a smooth weight map
 
         Parameters:
             nterms: Number of stretches/affine transforms to perform on images
@@ -1088,9 +1089,9 @@ class BSplineConvSingle(torch.nn.Module):
         return imten_blur
 
 
-class AffineConvMulti(torch.nn.Module):
+class SeidelConvMulti(torch.nn.Module):
     '''
-        Spatially varying convolution with Affine transform of image
+        SeidelConv for a focal stack: one SeidelConvSingle per focus image
 
         Parameters:
             nterms: Number of stretches/affine transforms to perform on images
@@ -1104,7 +1105,7 @@ class AffineConvMulti(torch.nn.Module):
     def __init__(self, nterms, dmax, rmax, imsize, ds_factor=32):
         super().__init__()
         nchan = imsize[2]
-        self.conv_ops = nn.ModuleList([AffineConvSingle(nterms, dmax,
+        self.conv_ops = nn.ModuleList([SeidelConvSingle(nterms, dmax,
                                                         rmax, imsize,
                                                         ds_factor) for _ in range(nchan)])
     

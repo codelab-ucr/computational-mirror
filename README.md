@@ -37,7 +37,7 @@ $$I = \sum_{q=1}^{Q} w_q \odot \left( h_q * \left( I_0 \circ \varphi_q \right) \
 - Warps, kernels and weights are learned from calibration captures: $Q = 31$ terms for each image of the focal stack,
   each image with its own set. The figure shows one learned term (warp magnified 3 times) and the three focus images
   it helps form.
-- `psfmodel = 'affineplus'` (SeidelConv, the baseline) is the same sum with affine warps.
+- `psfmodel = 'seidelconv'` (SeidelConv, the baseline) is the same sum with affine warps.
 
 ## Setup
 
@@ -93,7 +93,7 @@ python real_multi_pnp_deconv.py   # deconvolution             -> results/<sessio
 ```
 
 - Use the same `nfocus` in every script. `nfocus = 3` is the 3-image focal stack of our main results.
-- `psfmodel = 'bspline'` is our model; `'affineplus'` is the SeidelConv baseline.
+- `psfmodel = 'bspline'` is our model; `'seidelconv'` is the SeidelConv baseline.
 - To run only the last step, copy the final model from `<DATA>/visible/model/` to `real/models/<calib_session>/`.
 
 ## Citation
