@@ -1,45 +1,30 @@
 #!/usr/bin/env python
 
+'''
+    Calibration of the camera from captures of one session:
+    1. the focus index at which the centre of the frame is sharpest,
+    2. the region of the frame that is in focus,
+    3. the homography from the displayed pattern to the sensor.
+    Writes <root>/<session>/pycalib.mat (hmat, cfocus_idx, fcenter).
+
+    The calibration is void if the sensor, the mirrors or the monitor move, or if the focal-stack positions change.
+'''
+
 import os
 import sys
-import tqdm
-import pdb
-import importlib
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = "TRUE"
 
 import numpy as np
-import torch
 from scipy import io
-
-from torch.optim.lr_scheduler import LambdaLR
-import matplotlib.pyplot as plt
 import cv2
-
-plt.gray()
 
 sys.path.append('../modules')
 
 import calibutils
 import visutils
 import utils
-import linear
 
-utils = importlib.reload(utils)
-calibutils = importlib.reload(calibutils)
-visutils = importlib.reload(visutils)
-linear = importlib.reload(linear)
-
-# This script estimates the following:
-# 1. Homography between the monitor
-# 2. Index for which the central part of the measured stack is in focus
-# 
-#
-# The generated calibration file is void if you change the following
-# 1. Position of sensor or mirror
-# 2. Position of monitor
-# 3. Range of positions ('pos_array' in capture_focal_stack.py)
-#
 if __name__ == '__main__':
     root = '/home/akayabasi/broadband_mirror/real/data'
 
@@ -55,9 +40,6 @@ if __name__ == '__main__':
     testname = 'aruco25'
 
     # Load data
-    ds = io.loadmat('%s/%s/vignetting.mat'%(root, session))
-    vignetting = ds['imstack']/ds['exposure']
-
     ds = io.loadmat('%s/%s/black.mat'%(root, session))
     offset = ds['imstack']/ds['exposure']
 
@@ -81,9 +63,9 @@ if __name__ == '__main__':
 
     # Step 1: Find most focused image
     print('Finding center focused image index')
-    H, W, nf = imstack.shape
+    H, W, _ = imstack.shape
     imstack_sub = imstack[H//2-32:H//2+32, W//2-32:W//2+32, :].transpose(2, 0, 1)
-    cfocus_idx, best_img, _ = calibutils.find_sharpest_from_stack(imstack_sub)
+    cfocus_idx, _, _ = calibutils.find_sharpest_from_stack(imstack_sub)
 
     # Step 2: region where the image is focused
     print('Estimating region of focus center')

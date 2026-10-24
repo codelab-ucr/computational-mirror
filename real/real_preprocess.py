@@ -1,47 +1,29 @@
 #!/usr/bin/env python
 
+'''
+    Test captures for deconvolution: offset- and vignetting-corrected focal-stack images (mode 'multi') and, for
+    captures of the monitor, the displayed image registered to the sensor. Needs pycalib.mat of the calibration session.
+    Writes <saveroot>/<session>/<name>_<mode>.mat ('multi<nfocus>' in mode 'multi').
+'''
+
 import os
 import sys
-import tqdm
-import pdb
-import importlib
-import glob
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = "TRUE"
 
+import tqdm
 import numpy as np
-import torch
 from scipy import io
-
-from torch.optim.lr_scheduler import LambdaLR
-import matplotlib.pyplot as plt
 import cv2
-
-plt.gray()
 
 sys.path.append('../modules')
 
 import calibutils
-import visutils
-import utils
-import linear
-
-utils = importlib.reload(utils)
-calibutils = importlib.reload(calibutils)
-visutils = importlib.reload(visutils)
-linear = importlib.reload(linear)
-
-# This script preprocesses data for deconvolution
-#
-# Assumes that 'real_calibration.py' is run and 'pycalib.mat'
-# is already available
-
-# Chexmex is cfocus=27
 
 if __name__ == '__main__':
     root = '/home/akayabasi/broadband_mirror/real/data'     # Root of your data
     saveroot = '/home/akayabasi/broadband_mirror/real/pyprocessed'
-    mode = 'multi'                # 'raw', 'petzval', 'multi'
+    mode = 'multi'                # 'raw' (the centre-focused image only) or 'multi'
     nfocus = 3                  # If mode is multi
     ksize = 32                  # Size of center patch to find optimal focus
     datamode = 'monitor'        # 'monitor' or 'wild'
@@ -52,25 +34,15 @@ if __name__ == '__main__':
     session = '2.17.validation'
     calibsession = '2.19.calib'
 
-    filenames = glob.glob('%s/%s/*.mat'%(root, session))
-    filenames = [os.path.split(filename)[-1].replace('.mat', '') for filename in filenames]
-    filenames = [filename for filename in filenames if 'black' not in filename]
-    filenames = [filename for filename in filenames if 'vignetting' not in filename]
-
-    #imlist = filenames
-
-    #imlist = ['apples_%s'%wvl for wvl in ['blue', 'green', 'red', 'nir', 'swir']]
-    #imlist = ['iso_reschart']
     imlist = ['0810', '0886', '0872', '0900', 'grid_32', 'iso_reschart', 'sector', 'usaf_grid']
-    #imlist = ['chexmex']
-    
+
     # Load data
     ds = io.loadmat('%s/%s/black.mat'%(root, session))
-    offset = ds['imstack'] #/ds['exposure']
+    offset = ds['imstack']
 
     ds = io.loadmat('%s/%s/vignetting.mat'%(root, session))
     vignetting = ds['imstack']/ds['exposure'] - offset/ds['exposure']
-    
+
     vignetting = cv2.GaussianBlur(vignetting, [99, 99], 0)
 
     # Load calibration information
@@ -78,19 +50,15 @@ if __name__ == '__main__':
     hmat = ds['hmat']
     cfocus_idx = ds['cfocus_idx'].flatten()[0]
     fcenter = ds['fcenter'].flatten()
-    
+
     H, W, _ = vignetting.shape
-    
-    # Multifocus indices. This is heuristic
-    multifocus_idx = np.linspace(cfocus_idx, cfocus_idx-multi_idx_min,
-                                 nfocus).astype(int)
-    
+
     os.makedirs('%s/%s'%(saveroot, session), exist_ok=True)
-        
+
     tbar = tqdm.tqdm(imlist)
     for imname in tbar:
         ds = io.loadmat('%s/%s/%s.mat'%(root, session, imname))
-        
+
         imstack = ds['imstack']/ds['exposure']
         imstack -= offset/ds['exposure']
 
@@ -105,36 +73,24 @@ if __name__ == '__main__':
                 imstack_sub.transpose(2, 0, 1).astype(np.float64)
             )
 
-            # Bypass
-            if bypass_cfocus is not None:
-                cfocus_idx = bypass_cfocus
-
-            multifocus_idx = np.linspace(cfocus_idx,
-                                         cfocus_idx-multi_idx_min,
-                                         nfocus).astype(int)
-            
         if bypass_cfocus is not None:
             cfocus_idx = bypass_cfocus
 
+        # Multifocus indices. This is heuristic
         multifocus_idx = np.linspace(cfocus_idx,
-                                         cfocus_idx-multi_idx_min,
-                                         nfocus).astype(int)
-            
+                                     cfocus_idx-multi_idx_min,
+                                     nfocus).astype(int)
+
         tbar.set_description('%s | focus = %d'%(imname, cfocus_idx))
         tbar.refresh()
-        
+
         if mode == 'raw':
             meas = imstack[..., cfocus_idx]
-        elif mode == 'petzval':
-            raise ValueError('Not yet implemented')
         else:
             meas = imstack[..., multifocus_idx]
 
-        if datamode == 'monitor': 
+        if datamode == 'monitor':
             gt = ds['gt'][:, ::-1, 1]
-
-            # Temporary hack, do not use this afterwards
-            #gt = cv2.resize(gt, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
             gt_reg = cv2.warpPerspective(gt, hmat, [W, H])
         else:
             gt_reg = imstack[..., cfocus_idx]
@@ -156,4 +112,3 @@ if __name__ == '__main__':
                                       imname,
                                       mname),
                 mdict)
-        

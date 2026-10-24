@@ -1,10 +1,8 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import numpy as np
 import os
 import sys
-import pdb
 import cv2
 
 import basicblock as B
@@ -56,11 +54,7 @@ class UNetRes(nn.Module):
         self.m_tail = B.conv(nc[0], out_nc, bias=bias, mode='C')
 
     def forward(self, x0):
-#        h, w = x.size()[-2:]
-#        paddingBottom = int(np.ceil(h/8)*8-h)
-#        paddingRight = int(np.ceil(w/8)*8-w)
-#        x = nn.ReplicationPad2d((0, paddingRight, 0, paddingBottom))(x)
-
+        # the image height and width must be multiples of 8 (three 2x downsamplings)
         x1 = self.m_head(x0)
         x2 = self.m_down1(x1)
         x3 = self.m_down2(x2)
@@ -70,69 +64,7 @@ class UNetRes(nn.Module):
         x = self.m_up2(x+x3)
         x = self.m_up1(x+x2)
         x = self.m_tail(x+x1)
-#        x = x[..., :h, :w]
 
-        return x
-
-class UNetRes_Gemini(nn.Module):
-    def __init__(self, in_nc=2, out_nc=1, nc=[64, 128, 256, 512], nb=4, 
-                 act_mode='R', downsample_mode='strideconv', upsample_mode='convtranspose'):
-        super(UNetRes, self).__init__()
-        
-        self.m_head = nn.Conv2d(in_nc, nc[0], kernel_size=3, padding=1, bias=True)
-
-        # helper for ResBlock
-        def ResBlock(channels):
-            return nn.Sequential(
-                nn.Conv2d(channels, channels, 3, 1, 1, bias=True),
-                nn.ReLU(inplace=True),
-                nn.Conv2d(channels, channels, 3, 1, 1, bias=True)
-            )
-
-        # Downsample
-        self.m_down1 = nn.ModuleList([ResBlock(nc[0]) for _ in range(nb)])
-        self.m_down2 = nn.ModuleList([ResBlock(nc[1]) for _ in range(nb)])
-        self.m_down3 = nn.ModuleList([ResBlock(nc[2]) for _ in range(nb)])
-        self.m_down4 = nn.ModuleList([ResBlock(nc[3]) for _ in range(nb)])
-
-        self.d_l1 = nn.Conv2d(nc[0], nc[1], 2, 2)
-        self.d_l2 = nn.Conv2d(nc[1], nc[2], 2, 2)
-        self.d_l3 = nn.Conv2d(nc[2], nc[3], 2, 2)
-
-        # Upsample
-        self.u_l3 = nn.ConvTranspose2d(nc[3], nc[2], 2, 2)
-        self.u_l2 = nn.ConvTranspose2d(nc[2], nc[1], 2, 2)
-        self.u_l1 = nn.ConvTranspose2d(nc[1], nc[0], 2, 2)
-
-        self.m_up3 = nn.ModuleList([ResBlock(nc[2]) for _ in range(nb)])
-        self.m_up2 = nn.ModuleList([ResBlock(nc[1]) for _ in range(nb)])
-        self.m_up1 = nn.ModuleList([ResBlock(nc[0]) for _ in range(nb)])
-
-        self.m_tail = nn.Conv2d(nc[0], out_nc, 3, 1, 1, bias=True)
-
-    def forward(self, x):
-        # Padding to ensure dimensions are multiples of 8
-        h, w = x.size()[-2:]
-        paddingBottom = int(np.ceil(h/8)*8) - h
-        paddingRight = int(np.ceil(w/8)*8) - w
-        x = nn.functional.pad(x, (0, paddingRight, 0, paddingBottom), mode='reflect')
-
-        x1 = self.m_head(x)
-        x2 = self.d_l1(self._seq_forward(self.m_down1, x1))
-        x3 = self.d_l2(self._seq_forward(self.m_down2, x2))
-        x4 = self.d_l3(self._seq_forward(self.m_down3, x3))
-        x = self._seq_forward(self.m_down4, x4)
-
-        x = self._seq_forward(self.m_up3, x + self.u_l3(x))
-        x = self._seq_forward(self.m_up2, x + self.u_l2(x3))
-        x = self._seq_forward(self.m_up1, x + self.u_l1(x2))
-
-        x = self.m_tail(x + x1)
-        return x[..., :h, :w]
-
-    def _seq_forward(self, module_list, x):
-        for m in module_list:
-            x = m(x) + x
         return x
 
 # ==============================================================================
@@ -267,168 +199,3 @@ def pnp_hqs_blackbox(y, forward_op, denoiser_fn, x_init=None,
         cv2.imshow('Reconstruction', im_rec/maxval)
         cv2.waitKey(1)
     return x
-
-def pnp_pgm_robust(
-    y,                      # Observations
-    forward_op,             # Approximate Forward Operator
-    denoiser_fn,            # The Prior (GrayscaleDPIR.forward)
-    x_init=None,
-    n_iters=50,             # PGM needs more iterations than HQS (50-100)
-    step_size=0.9,          # IMPORTANT: Must be < 2 / Lipschitz constant of A
-    sigma_0=49/255,
-    sigma_end=15/255,
-    lamb=1.0,               # Regularization strength
-    device='cuda'
-):
-    """
-    Robust PnP Solver for Approximate Operators.
-    Uses Proximal Gradient Method (Forward-Backward Splitting).
-    
-    Rule of Thumb: Treat Model Error as extra Noise.
-    """
-    if x_init is None:
-        x = torch.zeros_like(y) # Or use y if dimensions match
-    else:
-        x = x_init.clone()
-
-    # Decay strategy: We might not want to decay sigma fully if the model is bad.
-    # Keeping sigma slightly higher masks model mismatch artifacts.
-    sigmas = torch.logspace(np.log10(sigma_0), np.log10(sigma_end), n_iters).to(device)
-
-    for i in range(n_iters):
-        sigma = sigmas[i]
-        
-        # --- Step 1: Gradient Descent on Data Term (Forward Step) ---
-        # x_new = x - step_size * grad( ||Ax - y||^2 )
-        
-        # We reuse the auto-differentiation helper from before
-        grad_data, _ = compute_grad_data_term(forward_op, x, y)
-        #pdb.set_trace()
-        
-        # Gradient Update
-        z = x - step_size * grad_data
-
-        # --- Step 2: Denoising (Backward / Proximal Step) ---
-        # x = Denoiser(z, sigma * sqrt(lambda))
-        # Note: In PGM, the effective noise level passed to the denoiser 
-        # scales with the step size. 
-        
-        # Refined noise level for the denoiser:
-        denoise_sigma = sigma * np.sqrt(lamb / step_size)
-        
-        with torch.no_grad():
-            x = denoiser_fn(z, denoise_sigma)
-
-        # Optional: Monitoring
-        if i % 10 == 0:
-            norm_grad = torch.mean(grad_data**2).item()
-            print(f"Iter {i} | Sigma: {denoise_sigma:.4f} | Grad Mag: {norm_grad:.6f}")
-
-            im_rec = x.squeeze().cpu().numpy().astype(np.float32)
-
-            cv2.imshow('Reconstruction', im_rec)
-            cv2.waitKey(1)
-
-    return x
-
-# ==============================================================================
-# SECTION 5: DEMO / TEST
-# ==============================================================================
-
-if __name__ == "__main__":
-    # Settings
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    WEIGHT_PATH = 'drunet_gray.pth' # <--- MAKE SURE THIS FILE EXISTS
-    
-    print(f"Running on {device}")
-    
-    if not os.path.exists(WEIGHT_PATH):
-        print(f"\n[!] Missing Weights: {WEIGHT_PATH}")
-        print("Please download it from: https://github.com/cszn/KAIR/releases/download/v1.0/drunet_gray.pth")
-        sys.exit()
-
-    # 1. Load Prior
-    prior = GrayscaleDPIR(WEIGHT_PATH, device=device)
-
-    # 2. Create Synthetic Data
-    # 256x256 Image (Circle)
-    gt = torch.zeros(1, 1, 256, 256).to(device)
-    Y, X = torch.meshgrid(torch.arange(256), torch.arange(256), indexing='ij')
-    mask_circle = ((X - 128)**2 + (Y - 128)**2) < 60**2
-    gt[:, :, mask_circle] = 0.8
-    gt = gt.to(device)
-
-    # 3. Define Forward Operator: Random Inpainting
-    # We remove 70% of pixels randomly
-    mask = torch.rand_like(gt) > 0.7
-    mask = mask.float().to(device)
-
-    def forward_inpainting(x):
-        return x * mask
-
-    # Create Observation
-    y_obs = forward_inpainting(gt)
-    
-    # 4. Solve
-    print("Starting PnP Reconstruction...")
-    x_rec = pnp_hqs_blackbox(
-        y=y_obs,
-        forward_op=forward_inpainting,
-        denoiser_fn=prior.forward,
-        x_init=y_obs.clone(), # Start with the masked image
-        n_iters=12,
-        cg_iters=10,
-        lamb=1.0,
-        device=device
-    )
-    
-    print("Done.")
-    
-    # 5. Save/Show results (Simple ASCII art check)
-    mse = torch.mean((x_rec - gt)**2)
-    print(f"Reconstruction MSE: {mse:.6f}")
-    
-    # Save if you want
-    try:
-        from torchvision.utils import save_image
-        save_image(torch.cat([gt, y_obs, x_rec], dim=3), "pnp_result.png")
-        print("Saved comparison to 'pnp_result.png'")
-    except ImportError:
-        print("torchvision not installed, skipping image save.")
-
-def estimate_step_size(forward_op, shape, device='cuda', num_iters=10):
-    """
-    Estimates the Lipschitz constant L of (A^T A) using Power Iteration.
-    Returns safe step_size = 1.0 / L
-    """
-    print("Estimating optimal step size...")
-    # Random noise vector
-    b_k = torch.randn(shape, device=device)
-    b_k = b_k / torch.norm(b_k)
-
-    for _ in range(num_iters):
-        # 1. Apply Operator A (Forward)
-        # We need A * b_k. 
-        # Since forward_op might expect specific ranges, we just pass b_k.
-        b_in = b_k.requires_grad_(True)
-        Ab = forward_op(b_in)
-        
-        # 2. Apply Adjoint A^T (Backward)
-        # Vector-Jacobian Product of Ab with itself (dummy way to get A^T(Ab))
-        # grad( 0.5 * ||Ax||^2 ) = A^T A x
-        loss = 0.5 * torch.sum(Ab**2)
-        At_Ab = torch.autograd.grad(loss, b_in, create_graph=False)[0]
-        
-        # 3. Normalize
-        b_k = At_Ab.detach()
-        l_norm = torch.norm(b_k)
-        b_k = b_k / (l_norm + 1e-8)
-        
-    # L is approximately the largest eigenvalue magnitude
-    L = l_norm.item()
-    print(f"Estimated Lipschitz Constant L: {L:.4f}")
-    
-    # Theoretical Limit is 2/L. We use 1.0/L to be safe.
-    safe_step = 0.9 * (1.0 / (L + 1e-6))
-    print(f"Recommended Step Size: {safe_step:.6f}")
-    return safe_step
