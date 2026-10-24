@@ -17,7 +17,7 @@ from scipy import io
 import cv2
 
 if __name__ == '__main__':
-    root = '/home/akayabasi/broadband_mirror/real/data'     # Root of your data
+    root = '<DATA>/visible'                                 # your data folder (README: Data)
     mode = 'multi'                # 'raw' (the centre-focused image only) or 'multi'
 
     ntrain = 10                 # Number of training images

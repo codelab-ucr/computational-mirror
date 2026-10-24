@@ -269,13 +269,19 @@ class BSplineConvSingle(torch.nn.Module):
             imsize: 3-tuple of image size (H, W, nchan)
             ds_factor: Downsampling factor for weights, since they should be slowly varying
     '''
-    def __init__(self, nterms, dmax, rmax, imsize, ds_factor=32,cps_coarse=128,cps_middle=64,cps_dense=32):
+    def __init__(self, nterms, dmax, rmax, imsize, ds_factor=32, cps_coarse=None, cps_middle=None, cps_dense=None):
         super().__init__()
 
         # Learnable parameters: coarse, middle and dense B-spline control grids, kernels and weight maps
 
         H, W, _ = imsize
         self.nterms = nterms
+
+        # Control-point spacing (x, y) in pixels: 2 x 2, 8 x 8 and 32 x 32 grid cells over the frame, as in the
+        # published model ((320, 256), (80, 64), (20, 16) for 640 x 512 images)
+        cps_coarse = (W//2, H//2) if cps_coarse is None else cps_coarse
+        cps_middle = (W//8, H//8) if cps_middle is None else cps_middle
+        cps_dense = (W//32, H//32) if cps_dense is None else cps_dense
 
         disk_sizes = torch.linspace(1, dmax, nterms)
         self.cps_coarse = cps_coarse
@@ -443,9 +449,11 @@ class BSplineConvMulti(torch.nn.Module):
             imsize: 3-tuple of image size (H, W, nchan)
                 NOTE: Here, nchan is the number of focus images, and not wavelength
                     channels!
+            stride_coarse, stride_middle, stride_dense: control-point spacing (x, y) in pixels of the three
+                B-spline grids; default (W/2, H/2), (W/8, H/8), (W/32, H/32) as in the published model
             ds_factor: Downsampling factor for weights, since they should be slowly varying
     '''
-    def __init__(self, nterms, dmax, rmax, imsize,stride_coarse=256,stride_middle=128,stride_dense=64, ds_factor=32):
+    def __init__(self, nterms, dmax, rmax, imsize, stride_coarse=None, stride_middle=None, stride_dense=None, ds_factor=32):
         super().__init__()
         nchan = imsize[2]
         self.conv_ops = nn.ModuleList([BSplineConvSingle(nterms, dmax,
@@ -744,7 +752,8 @@ class PatchWiseConv(nn.Module):
                              ch - self.img_h//2 : ch + self.img_h//2, 
                              cw - self.img_w//2 : cw + self.img_w//2]
         
-        return out_crop / self.norm_map
+        pad = self.kernel_size//2
+        return (out_crop / self.norm_map)[..., pad:-pad, pad:-pad]
     
 class PatchWiseConvMulti(nn.Module):
     def __init__(self, img_shape=(512, 512), kernel_size=31, patch_size=64, stride=32, nchan=1):
@@ -764,8 +773,7 @@ class PatchWiseConvMulti(nn.Module):
                                                      stride) for _ in range(nchan)])
     
     def forward(self, image, eval=True):
-        pad = self.kernel_size//2
-        output_list = [conv_op(image)[..., pad:-pad, pad:-pad] for conv_op in self.conv_ops]
+        output_list = [conv_op(image) for conv_op in self.conv_ops]
 
         klist = [conv_op.kernels for conv_op in self.conv_ops]
         self.kernels = torch.cat(klist, dim=0)

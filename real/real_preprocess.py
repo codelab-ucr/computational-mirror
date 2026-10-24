@@ -21,8 +21,8 @@ sys.path.append('../modules')
 import calibutils
 
 if __name__ == '__main__':
-    root = '/home/akayabasi/broadband_mirror/real/data'     # Root of your data
-    saveroot = '/home/akayabasi/broadband_mirror/real/pyprocessed'
+    root = '<DATA>/visible'                                 # your data folder (README: Data)
+    saveroot = '<DATA>/visible/preprocessed'                # output folder of the preprocessed captures
     mode = 'multi'                # 'raw' (the centre-focused image only) or 'multi'
     nfocus = 3                  # If mode is multi
     ksize = 32                  # Size of center patch to find optimal focus

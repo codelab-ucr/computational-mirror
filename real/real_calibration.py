@@ -26,7 +26,7 @@ import visutils
 import utils
 
 if __name__ == '__main__':
-    root = '/home/akayabasi/broadband_mirror/real/data'
+    root = '<DATA>/visible'                                 # your data folder (README: Data)
 
     # For homography
     session = '2.19.calib'

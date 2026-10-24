@@ -27,14 +27,14 @@ if __name__ == '__main__':
     expname = 'sector'
     expfolder = '2.17.validation'
     calibfolder = '2.19.calib'
-    root = '/home/akayabasi/broadband_mirror/real/pyprocessed'
+    root = '<DATA>/visible/preprocessed'                    # saveroot of real_preprocess.py
     mode = 'multi'
     psfmodel = 'bspline'
     nterms = 31
     dmax = 11
-    nfocus = 1
-    rmax = 1.1
-    ds_factor = 32
+    nfocus = 3                   # images of the focal stack (3: our main results)
+    rmax = 1.02
+    ds_factor = 16 if psfmodel == 'seidelconv' else 32   # as the published models
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # Reconstruction method
@@ -63,7 +63,7 @@ if __name__ == '__main__':
         conv_op = linear.SeidelConvMulti(nterms, dmax, rmax, (H, W, nfocus),
                                          ds_factor=ds_factor).to(device)
     elif psfmodel == "bspline":
-         conv_op = linear.BSplineConvMulti(nterms,dmax,rmax,(H,W,nfocus),stride_coarse=256,stride_middle=128,stride_dense=80,ds_factor=ds_factor).to(device)
+         conv_op = linear.BSplineConvMulti(nterms, dmax, rmax, (H, W, nfocus), ds_factor=ds_factor).to(device)
     elif psfmodel == "definr":
          conv_op = linear.DefINRConvMulti(nterms,dmax,rmax,(H,W,nfocus),ds_factor=ds_factor,cps=32).to(device)
     elif psfmodel == 'eigen':
@@ -92,7 +92,7 @@ if __name__ == '__main__':
     cR = torch.linspace(0, np.sqrt(2), nfocus)[:, None, None]
     cS = (1/nfocus)**2
 
-    weights = torch.exp(-((R - cR)**2)/(cS))[:, None, ...].cuda()
+    weights = torch.exp(-((R - cR)**2)/(cS))[:, None, ...].to(device)
 
     x_init = (imblur_ten*weights).sum(0, keepdim=True)/weights.sum(0, keepdim=True)
 
@@ -100,7 +100,7 @@ if __name__ == '__main__':
 
     # PnP stuff
     prior = pnpsolver.GrayscaleDPIR(pnp_weights_path,
-                                    device='cuda')
+                                    device=device)
 
     cv2.imshow('Ground truth', im)
     cv2.imshow('Blurred image', meas[..., 0]/meas.max())
@@ -114,7 +114,7 @@ if __name__ == '__main__':
         n_iters=n_iters,
         cg_iters=cg_iters,
         lamb=lamb,
-        device='cuda',
+        device=device,
         sigma_0=sigma_max,
         sigma_end=sigma_min
     )
@@ -122,9 +122,10 @@ if __name__ == '__main__':
     # Save the reconstruction
     os.makedirs('results/%s/%s'%(expfolder, expname), exist_ok=True)
     im_rec = best_imten.squeeze().cpu().numpy().astype(np.float32)
-    io.savemat('results/%s/%s/%s_%s_%d_%d_%s.mat'%(expfolder,
+    io.savemat('results/%s/%s/%s%d_%s_%d_%d_%s.mat'%(expfolder,
                                                expname,
                                                mode,
+                                               nfocus,
                                                psfmodel,
                                                nterms, dmax,
                                                rec_method),

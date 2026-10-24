@@ -28,15 +28,15 @@ import linear
 
 if __name__ == '__main__':
     session_name = '2.19.calib'
-    root = '/mnt/mydisk/alper/broadband_imaging/data'
+    root = '<DATA>/visible'                                 # your data folder (README: Data)
     mode = 'multi'
-    nfocus = 1
+    nfocus = 3                   # images of the focal stack (3: our main results)
     psfmodel = 'bspline'         # 'bspline' (ours), 'seidelconv' (baseline); experimental: 'definr', 'eigen', 'patchwise'
     nterms = 31                  # Number of decomposition terms
     dmax = 11                     # Maximum disk size (initialization)
     rmax = 1.02                  # Maximum stretch factor (initialization)
     device = 'cuda'
-    ds_factor = 32              # Downsampling factor for weights
+    ds_factor = 16 if psfmodel == 'seidelconv' else 32   # Downsampling factor for weights (as the published models)
     bending_loss_on = True
     # Learning constants
     spline_level =3
@@ -46,8 +46,11 @@ if __name__ == '__main__':
         epochs=2000
     learning_rate = 5e-3
     lambda_kern = 1e-6
+    # Training recipe: learning-rate schedule 'cosine_with_warmup' (since 2026-03-05) or 'exponential' (the
+    # 2026-03-01 code); both with bending weights (1e-4, 1e-5, 1e-6)
     scheduler_type = "cosine_with_warmup" # exponential or cosine_with_warmup
     warmup_steps = 50
+    bending_weights = (1e-4, 1e-5, 1e-6)   # B-spline bending penalty of the coarse, middle and dense grids
     # Load data
     data = io.loadmat('%s/%s/pytraining_%s%d.mat'%(root, session_name, mode, nfocus))
     gt = data['gt_stack'][..., :10]
@@ -65,7 +68,7 @@ if __name__ == '__main__':
         conv_op = linear.SeidelConvMulti(nterms, dmax, rmax,
                                          (H, W, nchan), ds_factor).to(device)
     elif psfmodel == "bspline":
-         conv_op = linear.BSplineConvMulti(nterms,dmax,rmax,(H,W,nfocus),stride_coarse=256,stride_middle=128,stride_dense=80,ds_factor=ds_factor).to(device)
+         conv_op = linear.BSplineConvMulti(nterms, dmax, rmax, (H, W, nfocus), ds_factor=ds_factor).to(device)
     elif psfmodel == "definr":
          conv_op = linear.DefINRConvMulti(nterms,dmax,rmax,(H,W,nfocus),ds_factor=ds_factor,cps=32).to(device)
     elif psfmodel == 'eigen':
@@ -111,7 +114,7 @@ if __name__ == '__main__':
 
         for idx in tbar:
 
-            if (idx==1000) and (psfmodel=="bspliine"):
+            if (idx==1000) and (psfmodel=="bspline"):
                 for name,params in conv_op_sub.named_parameters():
                     if "dense_grid" in name:
                         params.requires_grad= False
@@ -134,16 +137,16 @@ if __name__ == '__main__':
             loss_kern = criterion_l1(conv_op_sub.kernels)
 
             loss = loss_data + lambda_kern*loss_kern
-            if bending_loss_on:
+            if bending_loss_on and psfmodel in ('bspline', 'definr'):
                 if psfmodel == "definr":
                     bending_energy = 1e-3*bspline_bending_loss(conv_op_sub.deformation_field,stride=conv_op_sub.bspline_cps)
                 elif psfmodel == "bspline":
                     if idx <1000:
-                        bending_energy= 1e-4*bspline_bending_loss(conv_op_sub.coarse_grid,stride=conv_op_sub.cps_coarse)
+                        bending_energy= bending_weights[0]*bspline_bending_loss(conv_op_sub.coarse_grid,stride=conv_op_sub.cps_coarse)
                     elif (idx)<2000:
-                        bending_energy = 1e-5*bspline_bending_loss(conv_op_sub.middle_grid,stride=conv_op_sub.cps_middle)
+                        bending_energy = bending_weights[1]*bspline_bending_loss(conv_op_sub.middle_grid,stride=conv_op_sub.cps_middle)
                     else:
-                        bending_energy = 1e-6*bspline_bending_loss(conv_op_sub.dense_grid,stride=conv_op_sub.cps_dense)
+                        bending_energy = bending_weights[2]*bspline_bending_loss(conv_op_sub.dense_grid,stride=conv_op_sub.cps_dense)
 
                 loss = loss + bending_energy
 
