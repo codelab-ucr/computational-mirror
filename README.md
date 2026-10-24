@@ -41,11 +41,10 @@ $$I = \sum_{q=1}^{Q} w_q \odot \left( h_q * \left( I_0 \circ \varphi_q \right) \
 
 ## Setup
 
-You need Python 3.11 and a CUDA GPU. We tested torch 2.9.1, numpy 1.26.4, kornia 0.8.2 and hf-deepali 0.6.5.
+You need Python 3.11 and a CUDA GPU. We tested torch 2.9.1, numpy 1.26.4 and hf-deepali 0.6.5.
 
 ```bash
-pip install torch torchvision "numpy<2" scipy opencv-python scikit-image matplotlib pyyaml tqdm kornia hf-deepali threadpoolctl
-export PYTHONPATH=/path/to/computational-mirror
+pip install torch "numpy<2" scipy opencv-python matplotlib tqdm hf-deepali
 ```
 
 ## Data
@@ -79,9 +78,9 @@ Our data: [calibration_data on Google Drive](https://drive.google.com/drive/fold
 
 ## Visible / NIR / SWIR (`real/`)
 
-Settings are the variables at the top of each script's `__main__` block: `root = '<DATA>/visible'`, `session`
-(`<calib_session>` or a test session), `nfocus`, `psfmodel`, ... The scripts open preview windows, so they need a
-display.
+Settings are the variables at the top of each script's `__main__` block: `root = '<DATA>/visible'` (the deconvolution
+reads `<DATA>/visible/preprocessed`, the `saveroot` of `real_preprocess.py`), `session` (`<calib_session>` or a test
+session), `nfocus`, `psfmodel`, ... The scripts open preview windows, so they need a display.
 
 ```bash
 cd real
@@ -92,8 +91,9 @@ python real_preprocess.py         # test captures             -> <saveroot>/<ses
 python real_multi_pnp_deconv.py   # deconvolution             -> results/<session>/<name>/multi<nfocus>_<psfmodel>_31_11_pnp.png
 ```
 
-- Use the same `nfocus` in every script. `nfocus = 3` is the 3-image focal stack of our main results.
-- `psfmodel = 'bspline'` is our model; `'seidelconv'` is the SeidelConv baseline.
+- Use the same `nfocus` in every script; the default `nfocus = 3` is the 3-image focal stack of our main results.
+- `psfmodel = 'bspline'` is our model; `'seidelconv'` is the SeidelConv baseline. `'definr'`, `'eigen'` and
+  `'patchwise'` are experimental models.
 - To run only the last step, copy the final model from `<DATA>/visible/model/` to `real/models/<calib_session>/`.
 
 ## Citation
